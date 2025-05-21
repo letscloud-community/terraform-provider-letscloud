@@ -18,8 +18,8 @@ func TestAccInstanceResource(t *testing.T) {
 	}
 
 	// Configura o mock client
-	mockClient := &letsCloudClientMock{}
-	mockLetsCloudClient = mockClient
+	mockClient := NewLetsCloudClientMock()
+	MockLetsCloudClient = mockClient
 
 	log.Printf("[DEBUG] Using mock client: %T", mockClient)
 

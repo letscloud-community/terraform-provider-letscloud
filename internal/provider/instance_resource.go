@@ -120,22 +120,21 @@ func (r *InstanceResource) Schema(ctx context.Context, req resource.SchemaReques
 }
 
 func (r *InstanceResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
 	}
 
 	client, ok := req.ProviderData.(LetsCloudClient)
+
 	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected LetsCloudClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			"Unexpected Data Source Configure Type",
+			fmt.Sprintf("Expected client.LetsCloudClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
+
 		return
 	}
-
-	tflog.Debug(ctx, "InstanceResource Configure: Using LetsCloudClient", map[string]interface{}{
-		"client_type": fmt.Sprintf("%T", client),
-	})
 
 	r.client = client
 }
@@ -147,6 +146,14 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	tflog.Info(ctx, "Starting instance creation", map[string]interface{}{
+		"label":         data.Label.ValueString(),
+		"location_slug": data.LocationSlug.ValueString(),
+		"plan_slug":     data.PlanSlug.ValueString(),
+		"image_slug":    data.ImageSlug.ValueString(),
+		"hostname":      data.Hostname.ValueString(),
+	})
+
 	// Convert SSH keys to string slice
 	sshKeys := make([]string, len(data.SSHKeys))
 	for i, key := range data.SSHKeys {
@@ -157,9 +164,12 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	sshSlug := ""
 	if len(sshKeys) > 0 {
 		sshSlug = sshKeys[0]
+		tflog.Debug(ctx, "Using SSH key", map[string]interface{}{
+			"ssh_key_prefix": sshSlug[:10] + "...",
+		})
 	}
 
-	err := r.client.CreateInstance(&domains.CreateInstanceRequest{
+	createRequest := &domains.CreateInstanceRequest{
 		LocationSlug: data.LocationSlug.ValueString(),
 		PlanSlug:     data.PlanSlug.ValueString(),
 		ImageSlug:    data.ImageSlug.ValueString(),
@@ -167,16 +177,127 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		Password:     data.Password.ValueString(),
 		Label:        data.Label.ValueString(),
 		Hostname:     data.Hostname.ValueString(),
+	}
+
+	tflog.Info(ctx, "Preparing instance creation request", map[string]interface{}{
+		"label":         createRequest.Label,
+		"location_slug": createRequest.LocationSlug,
+		"plan_slug":     createRequest.PlanSlug,
+		"image_slug":    createRequest.ImageSlug,
+		"hostname":      createRequest.Hostname,
+		"has_ssh_key":   createRequest.SSHSlug != "",
+		"has_password":  createRequest.Password != "",
 	})
-	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create instance, got error: %s", err))
+
+	// Validate required fields
+	if createRequest.Label == "" {
+		resp.Diagnostics.AddError("Validation Error", "Label is required")
+		return
+	}
+	if createRequest.LocationSlug == "" {
+		resp.Diagnostics.AddError("Validation Error", "Location slug is required")
+		return
+	}
+	if createRequest.PlanSlug == "" {
+		resp.Diagnostics.AddError("Validation Error", "Plan slug is required")
+		return
+	}
+	if createRequest.ImageSlug == "" {
+		resp.Diagnostics.AddError("Validation Error", "Image slug is required")
+		return
+	}
+	if createRequest.Hostname == "" {
+		resp.Diagnostics.AddError("Validation Error", "Hostname is required")
 		return
 	}
 
-	// Wait for the instance to be ready and get its details
-	instance, err := waitForInstanceReady(r.client, data.Label.ValueString())
+	// Check if label already exists
+	existingInstances, listErr := r.client.Instances()
+	if listErr != nil {
+		tflog.Error(ctx, "Error checking for existing instances", map[string]interface{}{"error": listErr.Error()})
+		resp.Diagnostics.AddError("Client Error", "Error checking for existing instances: "+listErr.Error())
+		return
+	}
+
+	for _, inst := range existingInstances {
+		if inst.Label == createRequest.Label {
+			tflog.Error(ctx, "Label already exists", map[string]interface{}{
+				"label": createRequest.Label,
+				"id":    inst.Identifier,
+			})
+			resp.Diagnostics.AddError("Validation Error", fmt.Sprintf("Label '%s' already exists. Please choose a different label.", createRequest.Label))
+			return
+		}
+	}
+
+	// Create the instance
+	tflog.Debug(ctx, "Sending create instance request to LetsCloud API", map[string]interface{}{
+		"request": fmt.Sprintf("%+v", createRequest),
+	})
+
+	// Try to create the instance with retries
+	maxRetries := 3
+	retryCount := 0
+	var createErr error
+
+	for retryCount < maxRetries {
+		tflog.Info(ctx, "Attempting to create instance", map[string]interface{}{
+			"attempt":     retryCount + 1,
+			"max_retries": maxRetries,
+			"label":       createRequest.Label,
+			"location":    createRequest.LocationSlug,
+			"plan":        createRequest.PlanSlug,
+			"image":       createRequest.ImageSlug,
+			"hostname":    createRequest.Hostname,
+		})
+
+		createErr = r.client.CreateInstance(createRequest)
+		if createErr == nil {
+			tflog.Info(ctx, "Instance creation request sent successfully", map[string]interface{}{
+				"label": createRequest.Label,
+			})
+			break
+		}
+
+		tflog.Warn(ctx, "Failed to create instance, retrying...", map[string]interface{}{
+			"error":       createErr.Error(),
+			"retry_count": retryCount + 1,
+			"max_retries": maxRetries,
+			"label":       createRequest.Label,
+		})
+
+		retryCount++
+		if retryCount < maxRetries {
+			time.Sleep(5 * time.Second) // Wait 5 seconds between retries
+		}
+	}
+
+	if createErr != nil {
+		tflog.Error(ctx, "Failed to create instance after retries", map[string]interface{}{
+			"error":   createErr.Error(),
+			"request": fmt.Sprintf("%+v", createRequest),
+		})
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create instance, got error: %s", createErr))
+		return
+	}
+
+	// Now wait for the instance to be ready using the label and hostname
+	instance, err := waitForInstanceReady(ctx, r.client, createRequest.Label, createRequest.Hostname)
 	if err != nil {
+		tflog.Error(ctx, "Error waiting for instance to be ready", map[string]interface{}{
+			"error":    err.Error(),
+			"label":    createRequest.Label,
+			"hostname": createRequest.Hostname,
+		})
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Error waiting for instance to be ready: %s", err))
+		return
+	}
+
+	if instance == nil {
+		tflog.Error(ctx, "Instance is nil after waiting for ready state", map[string]interface{}{
+			"label": createRequest.Label,
+		})
+		resp.Diagnostics.AddError("Client Error", "Instance is nil after waiting for ready state")
 		return
 	}
 
@@ -185,61 +306,146 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	data.IPv4 = types.StringValue(getInstanceIPv4(instance))
 	data.IPv6 = types.StringValue(getInstanceIPv6(instance))
 
-	tflog.Trace(ctx, "created an instance resource")
+	tflog.Info(ctx, "Instance created successfully", map[string]interface{}{
+		"id":           instance.Identifier,
+		"state":        getInstanceState(instance),
+		"ipv4":         getInstanceIPv4(instance),
+		"ipv6":         getInstanceIPv6(instance),
+		"label":        instance.Label,
+		"built":        instance.Built,
+		"booted":       instance.Booted,
+		"raw_instance": fmt.Sprintf("%+v", instance),
+	})
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func waitForInstanceReady(client LetsCloudClient, instanceID string) (*domains.Instance, error) {
-	// First check if instance is already ready
-	instance, err := client.Instance(instanceID)
-	if err == nil && instance != nil && instance.Built && instance.Booted {
-		tflog.Debug(context.Background(), fmt.Sprintf("Instance %s is already ready: built=%v, booted=%v",
-			instanceID, instance.Built, instance.Booted))
-		return instance, nil
-	}
-
-	maxAttempts := 10 // 10 minutes total
+func waitForInstanceReady(ctx context.Context, client LetsCloudClient, label, hostname string) (*domains.Instance, error) {
+	maxAttempts := 400 // 20 minutes total (400 attempts × 3 seconds)
 	attempt := 0
-	for attempt < maxAttempts {
-		tflog.Debug(context.Background(), fmt.Sprintf("Checking instance %s status (attempt %d/%d)",
-			instanceID, attempt+1, maxAttempts))
+	lastError := ""
+	lastState := ""
+	lastIPs := ""
+	lastResponse := ""
+	var instanceID string
 
-		instance, err := client.Instance(instanceID)
+	for attempt < maxAttempts {
+		tflog.Info(ctx, "Checking instance status", map[string]interface{}{
+			"label":           label,
+			"hostname":        hostname,
+			"attempt":         attempt + 1,
+			"max_attempts":    maxAttempts,
+			"seconds_elapsed": attempt * 3,
+			"last_error":      lastError,
+			"last_state":      lastState,
+			"last_ips":        lastIPs,
+			"last_response":   lastResponse,
+		})
+
+		// List all instances to find our target
+		instances, err := client.Instances()
 		if err != nil {
-			// If instance is not found yet, continue waiting
-			if strings.Contains(err.Error(), "Instance not found") {
-				tflog.Debug(context.Background(), fmt.Sprintf("Instance %s not found yet, waiting...", instanceID))
-				attempt++
-				time.Sleep(60 * time.Second) // Wait 1 minute between checks
-				continue
+			lastError = err.Error()
+			tflog.Warn(ctx, "Error listing instances", map[string]interface{}{
+				"error":           err.Error(),
+				"attempt":         attempt + 1,
+				"max_attempts":    maxAttempts,
+				"seconds_elapsed": attempt * 3,
+			})
+			attempt++
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		// Find our instance by label and hostname
+		var instance *domains.Instance
+		for _, inst := range instances {
+			if inst.Label == label && inst.Hostname == hostname {
+				instanceCopy := inst
+				instance = &instanceCopy
+				instanceID = instance.Identifier
+				break
 			}
-			return nil, fmt.Errorf("error getting instance: %w", err)
 		}
 
 		if instance == nil {
-			tflog.Debug(context.Background(), fmt.Sprintf("Instance %s is nil, waiting...", instanceID))
+			tflog.Info(ctx, "Instance not found yet, waiting...", map[string]interface{}{
+				"label":           label,
+				"hostname":        hostname,
+				"attempt":         attempt + 1,
+				"max_attempts":    maxAttempts,
+				"seconds_elapsed": attempt * 3,
+			})
 			attempt++
-			time.Sleep(60 * time.Second)
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
 		// Log the current state
-		tflog.Debug(context.Background(), fmt.Sprintf("Instance %s state: built=%v, booted=%v, ipv4=%v, ipv6=%v",
-			instanceID,
-			instance.Built,
-			instance.Booted,
-			getInstanceIPv4(instance),
-			getInstanceIPv6(instance)))
+		currentState := getInstanceState(instance)
+		lastState = currentState
+		currentIPs := fmt.Sprintf("IPv4: %s, IPv6: %s", getInstanceIPv4(instance), getInstanceIPv6(instance))
+		lastIPs = currentIPs
+		lastResponse = fmt.Sprintf("%+v", instance)
 
-		if instance.Built && instance.Booted {
-			tflog.Debug(context.Background(), fmt.Sprintf("Instance %s is ready!", instanceID))
+		tflog.Info(ctx, "Current instance state", map[string]interface{}{
+			"instance_id":     instanceID,
+			"built":           instance.Built,
+			"booted":          instance.Booted,
+			"state":           currentState,
+			"ipv4":            getInstanceIPv4(instance),
+			"ipv6":            getInstanceIPv6(instance),
+			"attempt":         attempt + 1,
+			"max_attempts":    maxAttempts,
+			"seconds_elapsed": attempt * 3,
+			"raw_instance":    lastResponse,
+		})
+
+		// Check if instance is in an error state
+		if instance.Suspended {
+			return nil, fmt.Errorf("instance %s is suspended", instanceID)
+		}
+
+		// Check if instance has IP addresses assigned
+		hasIPv4 := getInstanceIPv4(instance) != ""
+		hasIPv6 := getInstanceIPv6(instance) != ""
+
+		// Instance is considered ready when:
+		// 1. It is built and booted
+		// 2. It has at least one IP address assigned
+		if instance.Built && instance.Booted && (hasIPv4 || hasIPv6) {
+			tflog.Info(ctx, "Instance is ready!", map[string]interface{}{
+				"instance_id":  instanceID,
+				"state":        currentState,
+				"ipv4":         getInstanceIPv4(instance),
+				"ipv6":         getInstanceIPv6(instance),
+				"has_ipv4":     hasIPv4,
+				"has_ipv6":     hasIPv6,
+				"raw_instance": lastResponse,
+			})
 			return instance, nil
 		}
 
+		// Log progress information
+		tflog.Info(ctx, "Instance still not ready", map[string]interface{}{
+			"instance_id":     instanceID,
+			"built":           instance.Built,
+			"booted":          instance.Booted,
+			"has_ipv4":        hasIPv4,
+			"has_ipv6":        hasIPv6,
+			"state":           currentState,
+			"attempt":         attempt + 1,
+			"max_attempts":    maxAttempts,
+			"seconds_elapsed": attempt * 3,
+			"raw_instance":    lastResponse,
+		})
+
 		attempt++
-		time.Sleep(60 * time.Second) // Wait 1 minute between checks
+		time.Sleep(3 * time.Second) // Wait 3 seconds between checks
 	}
-	return nil, fmt.Errorf("timeout waiting for instance %s to be ready after %d minutes", instanceID, maxAttempts)
+
+	return nil, fmt.Errorf("timeout waiting for instance with label %s and hostname %s to be ready after %d seconds. Last known state: %s, Last error: %s, Last IPs: %s, Last response: %s",
+		label, hostname, maxAttempts*3, lastState, lastError, lastIPs, lastResponse)
 }
 
 func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -286,11 +492,13 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	// Update label and hostname in the mock client
 	if mock, ok := r.client.(*letsCloudClientMock); ok {
-		err := mock.UpdateInstance(state.Id.ValueString(), data.Label.ValueString(), data.Hostname.ValueString())
+		instance, err := mock.Instance(state.Id.ValueString())
 		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update instance, got error: %s", err))
+			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read instance for update, got error: %s", err))
 			return
 		}
+		instance.Label = data.Label.ValueString()
+		instance.Hostname = data.Hostname.ValueString()
 	}
 
 	instance, err := r.client.Instance(state.Id.ValueString())

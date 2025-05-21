@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -16,6 +17,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/letscloud-community/letscloud-go"
+	"github.com/letscloud-community/terraform-provider-letscloud/internal/provider/client"
+	"github.com/letscloud-community/terraform-provider-letscloud/internal/provider/sshkey"
 )
 
 // Ensure LetsCloudProvider satisfies various provider interfaces.
@@ -29,6 +32,8 @@ type LetsCloudProvider struct {
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
 	version string
+	// client is the LetsCloud client instance
+	client client.LetsCloudClient
 }
 
 // LetsCloudProviderModel describes the provider data model.
@@ -36,8 +41,8 @@ type LetsCloudProviderModel struct {
 	APIToken types.String `tfsdk:"api_token"`
 }
 
-// mockLetsCloudClient is used for testing. If set, it will be used instead of a real client.
-var mockLetsCloudClient LetsCloudClient = nil
+// MockLetsCloudClient is used for testing. If set, it will be used instead of a real client.
+var MockLetsCloudClient client.LetsCloudClient = nil
 
 func (p *LetsCloudProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "letscloud"
@@ -103,25 +108,38 @@ func (p *LetsCloudProvider) Configure(ctx context.Context, req provider.Configur
 		return
 	}
 
-	// Se o mockLetsCloudClient estiver setado, use ele
-	if mockLetsCloudClient != nil {
-		tflog.Debug(ctx, "Using mock LetsCloud client for testing")
-		resp.DataSourceData = mockLetsCloudClient
-		resp.ResourceData = mockLetsCloudClient
+	// If MockLetsCloudClient is set, use it
+	if MockLetsCloudClient != nil {
+		p.client = MockLetsCloudClient
+		resp.DataSourceData = p.client
+		resp.ResourceData = p.client
 		return
 	}
 
 	// Create a new LetsCloud client using the configuration values
-	var client LetsCloudClient
+	var client client.LetsCloudClient
 
 	// If we're in test mode or using a mock token, use the mock client
 	if p.version == "test" || apiToken == "mock-token-for-testing" {
-		tflog.Debug(ctx, "Using mock LetsCloud client for testing")
-		client = &letsCloudClientMock{} // Use our mock client implementation
+		client = NewLetsCloudClientMock()
 	} else {
-		tflog.Debug(ctx, "Creating real LetsCloud client")
+		// Validate API token format
+		if len(apiToken) < 10 {
+			tflog.Error(ctx, "API token appears to be invalid", map[string]interface{}{
+				"token_length": len(apiToken),
+			})
+			resp.Diagnostics.AddError(
+				"Invalid API Token",
+				"The provided API token appears to be invalid. Please check your API token and try again.",
+			)
+			return
+		}
+
 		lc, err := letscloud.New(apiToken)
 		if err != nil {
+			tflog.Error(ctx, "Failed to create LetsCloud client", map[string]interface{}{
+				"error": err.Error(),
+			})
 			resp.Diagnostics.AddError(
 				"Unable to Create LetsCloud API Client",
 				"An unexpected error occurred when creating the LetsCloud API client. "+
@@ -130,18 +148,37 @@ func (p *LetsCloudProvider) Configure(ctx context.Context, req provider.Configur
 			)
 			return
 		}
-		client = lc
+
+		// Test the client with a simple call
+		_, err = lc.Instance("test")
+		if err != nil && !strings.Contains(err.Error(), "Instance not found") {
+			tflog.Error(ctx, "Failed to test LetsCloud client", map[string]interface{}{
+				"error": err.Error(),
+			})
+			resp.Diagnostics.AddError(
+				"Unable to Connect to LetsCloud API",
+				"Failed to connect to the LetsCloud API. Please check your API token and try again.\n\n"+
+					"Error: "+err.Error(),
+			)
+			return
+		}
+
+		client = NewRealLetsCloudClient(lc)
 	}
+
+	// Store the client in the provider
+	p.client = client
 
 	// Make the LetsCloud client available during DataSource and Resource
 	// type Configure methods.
-	resp.DataSourceData = client
-	resp.ResourceData = client
+	resp.DataSourceData = p.client
+	resp.ResourceData = p.client
 }
 
 func (p *LetsCloudProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewInstanceResource,
+		sshkey.NewSSHKeyResource,
 	}
 }
 

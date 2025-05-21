@@ -11,13 +11,13 @@ provider "letscloud" {
   # api_token = "your-api-token"
 }
 
-# Create SSH keys
+# Create SSH key for instance access
 resource "letscloud_ssh_key" "main" {
-  name       = "main-key"
-  public_key = file("~/.ssh/id_rsa.pub") # Replace with your public key path
+  label = "main-key"
+  key   = file("~/.ssh/id_rsa.pub") # Replace with your public key path
 }
 
-# Create a complete instance with all options
+# Create a complete instance with all available options
 resource "letscloud_instance" "complete" {
   label         = "complete-instance"
   plan_slug     = "1vcpu-1gb-10ssd"     # Small instance with 1 vCPU, 1GB RAM, 10GB SSD
@@ -27,7 +27,7 @@ resource "letscloud_instance" "complete" {
 
   # Authentication options - you can use either SSH keys or password
   ssh_keys = [letscloud_ssh_key.main.id]
-  password = "SenhaSegura123!" # Optional if using SSH keys, required if not
+  password = "SecurePassword123!" # Optional if using SSH keys, required if not
 
   # Lifecycle rules
   lifecycle {

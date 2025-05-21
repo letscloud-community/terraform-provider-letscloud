@@ -1,42 +1,43 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
-package provider
+package sshkey
 
 import (
 	"fmt"
 
 	"github.com/letscloud-community/letscloud-go/domains"
+	"github.com/letscloud-community/terraform-provider-letscloud/internal/provider/client"
 )
 
-// letsCloudClientMock is a mock implementation of LetsCloudClient for testing.
-type letsCloudClientMock struct {
+// MockLetsCloudClient is a mock implementation of LetsCloudClient for testing.
+type MockLetsCloudClient struct {
 	sshKeys   map[string]*domains.SSHKey
 	instances map[string]*domains.Instance
 }
 
-// NewLetsCloudClientMock creates a new mock client.
-func NewLetsCloudClientMock() LetsCloudClient {
-	return &letsCloudClientMock{
+// NewMockLetsCloudClient creates a new mock client.
+func NewMockLetsCloudClient() client.LetsCloudClient {
+	return &MockLetsCloudClient{
 		sshKeys:   make(map[string]*domains.SSHKey),
 		instances: make(map[string]*domains.Instance),
 	}
 }
 
 // Close closes the mock client.
-func (m *letsCloudClientMock) Close() {
+func (m *MockLetsCloudClient) Close() {
 	// Nothing to do for mock client
 }
 
 // SSH Key methods.
-func (m *letsCloudClientMock) SSHKey(id string) (*domains.SSHKey, error) {
+func (m *MockLetsCloudClient) SSHKey(id string) (*domains.SSHKey, error) {
 	if key, exists := m.sshKeys[id]; exists {
 		return key, nil
 	}
 	return nil, fmt.Errorf("SSH key not found: %s", id)
 }
 
-func (m *letsCloudClientMock) SSHKeys() ([]domains.SSHKey, error) {
+func (m *MockLetsCloudClient) SSHKeys() ([]domains.SSHKey, error) {
 	keys := make([]domains.SSHKey, 0, len(m.sshKeys))
 	for _, key := range m.sshKeys {
 		keys = append(keys, *key)
@@ -44,7 +45,7 @@ func (m *letsCloudClientMock) SSHKeys() ([]domains.SSHKey, error) {
 	return keys, nil
 }
 
-func (m *letsCloudClientMock) CreateSSHKey(req *domains.SSHKeyCreateRequest) (*domains.SSHKey, error) {
+func (m *MockLetsCloudClient) CreateSSHKey(req *domains.SSHKeyCreateRequest) (*domains.SSHKey, error) {
 	// Check if label already exists
 	for _, key := range m.sshKeys {
 		if key.Title == req.Title {
@@ -63,7 +64,7 @@ func (m *letsCloudClientMock) CreateSSHKey(req *domains.SSHKeyCreateRequest) (*d
 	return key, nil
 }
 
-func (m *letsCloudClientMock) DeleteSSHKey(id string) error {
+func (m *MockLetsCloudClient) DeleteSSHKey(id string) error {
 	if _, exists := m.sshKeys[id]; !exists {
 		return fmt.Errorf("SSH key not found: %s", id)
 	}
@@ -72,7 +73,7 @@ func (m *letsCloudClientMock) DeleteSSHKey(id string) error {
 }
 
 // Instance methods.
-func (m *letsCloudClientMock) Instance(id string) (*domains.Instance, error) {
+func (m *MockLetsCloudClient) Instance(id string) (*domains.Instance, error) {
 	if instance, exists := m.instances[id]; exists {
 		// Simulate instance building process
 		if !instance.Built {
@@ -85,7 +86,7 @@ func (m *letsCloudClientMock) Instance(id string) (*domains.Instance, error) {
 	return nil, fmt.Errorf("Instance not found: %s", id)
 }
 
-func (m *letsCloudClientMock) Instances() ([]domains.Instance, error) {
+func (m *MockLetsCloudClient) Instances() ([]domains.Instance, error) {
 	instances := make([]domains.Instance, 0, len(m.instances))
 	for _, instance := range m.instances {
 		// Simulate instance building process
@@ -99,7 +100,7 @@ func (m *letsCloudClientMock) Instances() ([]domains.Instance, error) {
 	return instances, nil
 }
 
-func (m *letsCloudClientMock) CreateInstance(req *domains.CreateInstanceRequest) error {
+func (m *MockLetsCloudClient) CreateInstance(req *domains.CreateInstanceRequest) error {
 	id := fmt.Sprintf("mock-instance-%d", len(m.instances)+1)
 	instance := &domains.Instance{
 		Identifier: id,
@@ -117,7 +118,7 @@ func (m *letsCloudClientMock) CreateInstance(req *domains.CreateInstanceRequest)
 	return nil
 }
 
-func (m *letsCloudClientMock) DeleteInstance(id string) error {
+func (m *MockLetsCloudClient) DeleteInstance(id string) error {
 	if _, exists := m.instances[id]; !exists {
 		return fmt.Errorf("Instance not found: %s", id)
 	}
@@ -125,14 +126,14 @@ func (m *letsCloudClientMock) DeleteInstance(id string) error {
 	return nil
 }
 
-func (m *letsCloudClientMock) ResetPasswordInstance(id string, password string) error {
+func (m *MockLetsCloudClient) ResetPasswordInstance(id string, password string) error {
 	if _, exists := m.instances[id]; !exists {
 		return fmt.Errorf("Instance not found: %s", id)
 	}
 	return nil
 }
 
-func (m *letsCloudClientMock) LocationPlans(location string) ([]domains.Plan, error) {
+func (m *MockLetsCloudClient) LocationPlans(location string) ([]domains.Plan, error) {
 	return []domains.Plan{
 		{
 			Slug:         "plan-1",
