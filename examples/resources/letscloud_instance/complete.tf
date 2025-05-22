@@ -1,56 +1,63 @@
 terraform {
   required_providers {
     letscloud = {
-      source = "letscloud-community/letscloud"
+      source  = "letscloud-community/letscloud"
+      version = "1.1.0"
     }
   }
 }
 
 provider "letscloud" {
   # API token can be set via LETSCLOUD_API_TOKEN environment variable
-  # api_token = "your-api-token"
+  api_token = "your-api-token"
 }
 
-# Create SSH key for instance access
-resource "letscloud_ssh_key" "main" {
-  label = "main-key"
-  key   = file("~/.ssh/id_rsa.pub") # Replace with your public key path
+# Create multiple SSH keys for different access levels
+resource "letscloud_ssh_key" "admin" {
+  label = "admin-key"
+  key   = file("~/.ssh/admin.pub")
 }
 
-# Create a complete instance with all available options
-resource "letscloud_instance" "complete" {
-  label         = "complete-instance"
-  plan_slug     = "1vcpu-1gb-10ssd"     # Small instance with 1 vCPU, 1GB RAM, 10GB SSD
+resource "letscloud_ssh_key" "developer" {
+  label = "developer-key"
+  key   = file("~/.ssh/developer.pub")
+}
+
+# Create a production instance with multiple SSH keys
+resource "letscloud_instance" "production" {
+  label         = "prod-instance"
+  plan_slug     = "4vcpu-4gb-40ssd"    # 4 vCPU, 4GB RAM, 40GB SSD
   image_slug    = "ubuntu-24.04-x86_64" # Ubuntu 24.04 LTS
-  location_slug = "MIA1"                # Miami, USA
-  hostname      = "complete-instance.example.com"
-
-  # Authentication options - you can use either SSH keys or password
-  ssh_keys = [letscloud_ssh_key.main.id]
-  password = "SecurePassword123!" # Optional if using SSH keys, required if not
-
-  # Lifecycle rules
-  lifecycle {
-    # Prevent accidental deletion
-    prevent_destroy = true
-
-    # Ignore changes to password
-    ignore_changes = [password]
-  }
+  location_slug = "MIA1"               # Miami, USA
+  hostname      = "prod-instance.example.com"
+  ssh_keys      = [
+    letscloud_ssh_key.admin.id,
+    letscloud_ssh_key.developer.id
+  ]
+  password      = "P@ssw0rd123!Secure" # Must meet password requirements
+  depends_on    = [
+    letscloud_ssh_key.admin,
+    letscloud_ssh_key.developer
+  ]
 }
 
-# Output the instance details
-output "instance_ipv4" {
-  description = "The IPv4 address of the instance"
-  value       = letscloud_instance.complete.ipv4
+# Create a staging instance with developer access only
+resource "letscloud_instance" "staging" {
+  label         = "staging-instance"
+  plan_slug     = "2vcpu-2gb-20ssd"    # 2 vCPU, 2GB RAM, 20GB SSD
+  image_slug    = "ubuntu-24.04-x86_64" # Ubuntu 24.04 LTS
+  location_slug = "MIA1"               # Miami, USA
+  hostname      = "staging-instance.example.com"
+  ssh_keys      = [letscloud_ssh_key.developer.id]
+  password      = "P@ssw0rd123!Secure" # Must meet password requirements
+  depends_on    = [letscloud_ssh_key.developer]
 }
 
-output "instance_ipv6" {
-  description = "The IPv6 address of the instance (if available in the selected location)"
-  value       = letscloud_instance.complete.ipv6
+# Output the instance IPs for easy access
+output "production_ip" {
+  value = letscloud_instance.production.ipv4
 }
 
-output "instance_state" {
-  description = "The current state of the instance"
-  value       = letscloud_instance.complete.state
+output "staging_ip" {
+  value = letscloud_instance.staging.ipv4
 } 

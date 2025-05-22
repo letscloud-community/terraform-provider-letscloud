@@ -1,14 +1,37 @@
+# Output the SSH key ID
 output "ssh_key_id" {
-  description = "The ID of the created SSH key"
-  value       = letscloud_ssh_key.example.id
+  description = "The unique identifier for the SSH key"
+  value       = letscloud_ssh_key.main.id
 }
 
-output "ssh_key_name" {
-  description = "The name of the created SSH key"
-  value       = letscloud_ssh_key.example.name
+# Output the SSH key label
+output "ssh_key_label" {
+  description = "The label used to identify the SSH key"
+  value       = letscloud_ssh_key.main.label
 }
 
-output "ssh_key_description" {
-  description = "The description of the created SSH key"
-  value       = letscloud_ssh_key.example.description
+# Output the SSH key fingerprint (if available)
+output "ssh_key_fingerprint" {
+  description = "The fingerprint of the SSH key (if available)"
+  value       = letscloud_ssh_key.main.id
+}
+
+output "admin_key_id" {
+  description = "ID of the admin SSH key"
+  value       = letscloud_ssh_key.admin.id
+}
+
+output "admin_key_label" {
+  description = "Label of the admin SSH key"
+  value       = letscloud_ssh_key.admin.label
+}
+
+output "developer_key_id" {
+  description = "ID of the developer SSH key"
+  value       = letscloud_ssh_key.developer.id
+}
+
+output "developer_key_label" {
+  description = "Label of the developer SSH key"
+  value       = letscloud_ssh_key.developer.label
 } 
