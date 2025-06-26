@@ -32,10 +32,10 @@ resource "letscloud_instance" "with_existing_key" {
   image_slug    = "ubuntu-24.04-x86_64"
   location_slug = "MIA1"
   hostname      = "existing-key.example.com"
-  
+
   # Use SSH key found by data source
   ssh_keys = [data.letscloud_ssh_key.by_label.id]
-  
+
   password = "P@ssw0rd123!Secure"
 }
 

@@ -18,16 +18,16 @@ data "letscloud_ssh_keys" "all" {}
 # Example: Create instances using different existing SSH keys
 resource "letscloud_instance" "web_servers" {
   count = length(data.letscloud_ssh_keys.all.ssh_keys)
-  
+
   label         = "web-server-${count.index + 1}"
   plan_slug     = "1vcpu-1gb-10ssd"
   image_slug    = "ubuntu-24.04-x86_64"
   location_slug = "MIA1"
   hostname      = "web-server-${count.index + 1}.example.com"
-  
+
   # Use each SSH key for different instances
   ssh_keys = [data.letscloud_ssh_keys.all.ssh_keys[count.index].id]
-  
+
   password = "P@ssw0rd123!Secure"
 }
 
@@ -37,7 +37,7 @@ locals {
     for key in data.letscloud_ssh_keys.all.ssh_keys :
     key if can(regex("prod", key.label))
   ]
-  
+
   development_keys = [
     for key in data.letscloud_ssh_keys.all.ssh_keys :
     key if can(regex("dev", key.label))
