@@ -189,7 +189,10 @@ func (p *LetsCloudProvider) EphemeralResources(ctx context.Context) []func() eph
 }
 
 func (p *LetsCloudProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		sshkey.NewSSHKeyDataSource,
+		sshkey.NewSSHKeysDataSource,
+	}
 }
 
 func (p *LetsCloudProvider) Functions(ctx context.Context) []func() function.Function {
